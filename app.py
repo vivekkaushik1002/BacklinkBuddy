@@ -18,17 +18,54 @@ from sklearn.metrics import classification_report
 def preprocess_data(df):
     """
     Prepares backlink data for ML model.
-    Converts Nofollow to binary and detects spammy anchor text.
+    Maps column names from user's format and converts data for ML.
     """
-    # Convert Nofollow to binary
-    df['Nofollow'] = df['Nofollow'].astype(str).map({'TRUE': 1, 'FALSE': 0, True: 1, False: 0, 1: 1, 0: 0})
-    df['Nofollow'] = df['Nofollow'].fillna(0)  # Handle any NaN values
+    # Map column names from user's format to expected format
+    column_mapping = {
+        'Domain rating': 'Domain rating',
+        'UR': 'UR', 
+        'Domain Traffic': 'Domain traffic',
+        'External links': 'External links',
+        'Page traffic': 'Page traffic',
+        'Nofollow': 'Nofollow',
+        'Anchor': 'Anchor'
+    }
+    
+    # Rename columns if they exist in the dataframe
+    for user_col, standard_col in column_mapping.items():
+        if user_col in df.columns and user_col != standard_col:
+            df[standard_col] = df[user_col]
+    
+    # Convert Nofollow to binary - handle different possible formats
+    if 'Nofollow' in df.columns:
+        df['Nofollow'] = df['Nofollow'].astype(str).map({
+            'TRUE': 1, 'FALSE': 0, 'True': 1, 'False': 1, 
+            'true': 1, 'false': 0, '1': 1, '0': 0,
+            True: 1, False: 0, 1: 1, 0: 0
+        })
+        df['Nofollow'] = df['Nofollow'].fillna(0)  # Handle any NaN values
+    else:
+        df['Nofollow'] = 0  # Default to 0 if column doesn't exist
 
     # Spam keyword detection in anchor text
-    spam_keywords = ['casino', 'viagra', 'porn', 'gambling', 'loan', 'betting', 'cheap', 'hack']
-    df['Anchor_spam_flag'] = df['Anchor'].apply(
-        lambda x: 1 if any(word in str(x).lower() for word in spam_keywords) else 0
-    )
+    if 'Anchor' in df.columns:
+        spam_keywords = ['casino', 'viagra', 'porn', 'gambling', 'loan', 'betting', 'cheap', 'hack', 'pills', 'sex', 'adult']
+        df['Anchor_spam_flag'] = df['Anchor'].apply(
+            lambda x: 1 if any(word in str(x).lower() for word in spam_keywords) else 0
+        )
+    else:
+        df['Anchor_spam_flag'] = 0  # Default to 0 if column doesn't exist
+    
+    # Fill missing values for numeric columns
+    numeric_columns = ['Domain rating', 'UR', 'Domain traffic', 'External links', 'Page traffic']
+    for col in numeric_columns:
+        if col in df.columns:
+            # Convert to numeric and fill missing values
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            df[col] = df[col].fillna(0)
+        else:
+            df[col] = 0  # Create column with default value if missing
+    
     return df
 
 # -----------------------------------------
@@ -134,19 +171,25 @@ def main():
     """)
 
     # Sidebar with information
-    st.sidebar.header("📋 Required CSV Columns")
+    st.sidebar.header("📋 Supported CSV Columns")
     st.sidebar.write("""
-    **For Backlink Analysis:**
+    **Your CSV can include any of these columns:**
     - Domain rating
-    - UR
-    - Domain traffic
+    - UR  
+    - Domain Traffic (or Domain traffic)
     - External links
     - Page traffic
-    - Nofollow (TRUE/FALSE)
+    - Nofollow (TRUE/FALSE or 1/0)
     - Anchor (anchor text)
+    - Target URL
+    - Referring page title
+    - Referring page URL
+    - And many other columns (will be preserved)
     
     **For Training Data (additional):**
     - Classification (Good/Neutral/Toxic)
+    
+    ⚠️ **Note:** Missing columns will be filled with default values.
     """)
 
     # Upload CSV
