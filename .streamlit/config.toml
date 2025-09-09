@@ -3,6 +3,5 @@ headless = true
 address = "0.0.0.0"
 port = 5000
 maxUploadSize = 200
-
-[global]
-disableWatchdogWarning = true
+enableCORS = false
+enableXsrfProtection = false
