@@ -150,7 +150,11 @@ def main():
     """)
 
     # Upload CSV
-    uploaded_file = st.file_uploader("Upload your backlink CSV", type=["csv"])
+    uploaded_file = st.file_uploader(
+        "Upload your backlink CSV", 
+        type=["csv"],
+        help="Upload a CSV file containing your backlink data. Max file size: 200MB"
+    )
 
     # Ensure trained model exists
     model_path = "backlink_model.pkl"
@@ -165,14 +169,22 @@ def main():
                 if success:
                     st.rerun()
         
-        labeled_file = st.file_uploader("Upload Labeled Backlink Data (CSV for Training)", type=["csv"])
+        labeled_file = st.file_uploader(
+            "Upload Labeled Backlink Data (CSV for Training)", 
+            type=["csv"],
+            key="training_file_uploader"
+        )
         if labeled_file:
-            # Save uploaded file temporarily
-            with open("labeled_backlinks.csv", "wb") as f:
-                f.write(labeled_file.getbuffer())
-            success = train_model("labeled_backlinks.csv", model_path)
-            if success:
-                st.rerun()
+            try:
+                # Save uploaded file temporarily
+                with open("labeled_backlinks.csv", "wb") as f:
+                    f.write(labeled_file.getbuffer())
+                success = train_model("labeled_backlinks.csv", model_path)
+                if success:
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error uploading training file: {str(e)}")
+                st.write("Please try uploading the file again or check if the file is valid.")
         return
 
     # Load existing model
@@ -185,9 +197,14 @@ def main():
 
     if uploaded_file:
         try:
+            # Validate file size
+            if uploaded_file.size > 200 * 1024 * 1024:  # 200MB limit
+                st.error("File too large! Please upload a file smaller than 200MB.")
+                return
+            
             # Load and preprocess uploaded data
             df = pd.read_csv(uploaded_file)
-            st.info(f"Loaded {len(df)} backlinks from CSV")
+            st.info(f"Loaded {len(df)} backlinks from CSV file: {uploaded_file.name}")
             
             # Show original data structure
             st.subheader("📄 Original Data Preview")
@@ -210,15 +227,18 @@ def main():
             
             with col1:
                 good_count = classification_counts.get('Good', 0)
-                st.metric("Good Backlinks", good_count, f"{good_count/len(df)*100:.1f}%")
+                good_pct = (good_count / len(df) * 100) if len(df) > 0 else 0
+                st.metric("Good Backlinks", good_count, f"{good_pct:.1f}%")
             
             with col2:
                 neutral_count = classification_counts.get('Neutral', 0)
-                st.metric("Neutral Backlinks", neutral_count, f"{neutral_count/len(df)*100:.1f}%")
+                neutral_pct = (neutral_count / len(df) * 100) if len(df) > 0 else 0
+                st.metric("Neutral Backlinks", neutral_count, f"{neutral_pct:.1f}%")
             
             with col3:
                 toxic_count = classification_counts.get('Toxic', 0)
-                st.metric("Toxic Backlinks", toxic_count, f"{toxic_count/len(df)*100:.1f}%")
+                toxic_pct = (toxic_count / len(df) * 100) if len(df) > 0 else 0
+                st.metric("Toxic Backlinks", toxic_count, f"{toxic_pct:.1f}%")
 
             # Visualization
             st.subheader("📊 Backlink Quality Distribution")
