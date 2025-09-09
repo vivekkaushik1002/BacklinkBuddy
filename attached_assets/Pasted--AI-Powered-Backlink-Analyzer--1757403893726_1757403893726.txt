@@ -1,0 +1,161 @@
+# =========================================
+# AI-Powered Backlink Analyzer
+# =========================================
+
+import pandas as pd
+import numpy as np
+import joblib
+import streamlit as st
+import matplotlib.pyplot as plt
+import os
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
+
+# -----------------------------------------
+# Helper: Preprocess Backlink Data
+# -----------------------------------------
+def preprocess_data(df):
+    """
+    Prepares backlink data for ML model.
+    Converts Nofollow to binary and detects spammy anchor text.
+    """
+    # Convert Nofollow to binary
+    df['Nofollow'] = df['Nofollow'].astype(str).map({'TRUE': 1, 'FALSE': 0})
+
+    # Spam keyword detection in anchor text
+    spam_keywords = ['casino', 'viagra', 'porn', 'gambling', 'loan', 'betting', 'cheap', 'hack']
+    df['Anchor_spam_flag'] = df['Anchor'].apply(
+        lambda x: 1 if any(word in str(x).lower() for word in spam_keywords) else 0
+    )
+    return df
+
+# -----------------------------------------
+# Helper: Train and Save Model
+# -----------------------------------------
+def train_model(labeled_csv="labeled_backlinks.csv", model_path="backlink_model.pkl"):
+    """
+    Trains the Random Forest model using labeled backlink data.
+    """
+    st.info("Training model... This will only run once if model is missing.")
+    
+    # Load labeled training dataset
+    df = pd.read_csv(labeled_csv)
+    df = preprocess_data(df)
+
+    # Features and target
+    features = ['Domain rating', 'UR', 'Domain traffic', 'External links', 
+                'Page traffic', 'Nofollow', 'Anchor_spam_flag']
+    X = df[features]
+    y = df['Classification']  # Good, Neutral, Toxic
+
+    # Train-test split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+
+    # Train Random Forest
+    model = RandomForestClassifier(n_estimators=200, random_state=42)
+    model.fit(X_train, y_train)
+
+    # Evaluate performance
+    y_pred = model.predict(X_test)
+    st.text("Model Training Report:\n" + classification_report(y_test, y_pred))
+
+    # Save trained model
+    joblib.dump(model, model_path)
+    st.success(f"Model trained and saved as {model_path}")
+
+# -----------------------------------------
+# Helper: Predict Backlink Quality
+# -----------------------------------------
+def predict_backlinks(df, model):
+    """
+    Predicts backlink quality using trained model.
+    Adds probabilities and final classification to dataframe.
+    """
+    features = ['Domain rating', 'UR', 'Domain traffic', 'External links', 
+                'Page traffic', 'Nofollow', 'Anchor_spam_flag']
+
+    predictions = model.predict(df[features])
+    probabilities = model.predict_proba(df[features])
+
+    # Add prediction results to dataframe
+    df['ML_Classification'] = predictions
+    df['Good_Probability'] = probabilities[:, list(model.classes_).index('Good')]
+    df['Neutral_Probability'] = probabilities[:, list(model.classes_).index('Neutral')]
+    df['Toxic_Probability'] = probabilities[:, list(model.classes_).index('Toxic')]
+
+    return df
+
+# -----------------------------------------
+# Streamlit App
+# -----------------------------------------
+def main():
+    st.title("🔗 AI-Powered Backlink Quality Analyzer")
+    st.write("""
+    This tool analyzes your backlink profile using AI:
+    - Predicts backlink quality as **Good**, **Neutral**, or **Toxic**.
+    - Uses machine learning trained on historical backlink data.
+    - Provides probability scores for each prediction.
+    """)
+
+    # Upload CSV
+    uploaded_file = st.file_uploader("Upload your backlink CSV", type=["csv"])
+
+    # Ensure trained model exists
+    model_path = "backlink_model.pkl"
+    if not os.path.exists(model_path):
+        st.warning("No trained model found! Please provide a labeled dataset to train the model.")
+        labeled_file = st.file_uploader("Upload Labeled Backlink Data (CSV for Training)", type=["csv"])
+        if labeled_file:
+            # Save uploaded file temporarily
+            with open("labeled_backlinks.csv", "wb") as f:
+                f.write(labeled_file.getbuffer())
+            train_model("labeled_backlinks.csv", model_path)
+        return
+
+    # Load existing model
+    model = joblib.load(model_path)
+
+    if uploaded_file:
+        # Load and preprocess uploaded data
+        df = pd.read_csv(uploaded_file)
+        df = preprocess_data(df)
+
+        # Predict backlink quality
+        df = predict_backlinks(df, model)
+
+        # Show data preview
+        st.subheader("🔍 Prediction Results")
+        st.dataframe(df.head())
+
+        # Visualization
+        st.subheader("📊 Backlink Quality Distribution")
+        fig, ax = plt.subplots(figsize=(6, 6))
+        df['ML_Classification'].value_counts().plot.pie(autopct='%1.1f%%', ax=ax)
+        plt.title('Backlink Quality Breakdown')
+        st.pyplot(fig)
+
+        # Filter table by classification
+        st.subheader("🔎 Filter Backlinks by Classification")
+        filter_choice = st.selectbox("Choose category", ["All", "Good", "Neutral", "Toxic"])
+        if filter_choice != "All":
+            filtered_df = df[df['ML_Classification'] == filter_choice]
+        else:
+            filtered_df = df
+        st.dataframe(filtered_df)
+
+        # Download results
+        st.subheader("💾 Download Processed CSV")
+        output_csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Classified Backlinks",
+            data=output_csv,
+            file_name="backlinks_with_predictions.csv",
+            mime="text/csv"
+        )
+
+# Run Streamlit app
+if __name__ == "__main__":
+    main()
