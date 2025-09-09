@@ -18,7 +18,7 @@ from sklearn.metrics import classification_report
 def preprocess_data(df):
     """
     Prepares backlink data for ML model.
-    Converts Nofollow to binary and detects spammy anchor text.
+    Converts Nofollow to binary, detects spammy anchor text, and adds domain scoring.
     """
     # Convert Nofollow to binary
     df['Nofollow'] = df['Nofollow'].astype(str).map({'TRUE': 1, 'FALSE': 0, True: 1, False: 0, 1: 1, 0: 0})
@@ -29,7 +29,36 @@ def preprocess_data(df):
     df['Anchor_spam_flag'] = df['Anchor'].apply(
         lambda x: 1 if any(word in str(x).lower() for word in spam_keywords) else 0
     )
+    
+    # Domain scoring: Give more points to main domains vs subdomains
+    if 'Domain' in df.columns:
+        df['Domain_score'] = df['Domain'].apply(lambda x: get_domain_score(str(x)))
+    else:
+        df['Domain_score'] = 1.0  # Default score if no domain column
+    
+    # Add feature weights based on priority
+    df['DR_weighted'] = df['Domain rating'] * 3.0  # High priority
+    df['Traffic_weighted'] = df.get('Domain traffic', 0) * 3.0  # High priority
+    
     return df
+
+def get_domain_score(domain):
+    """
+    Calculate domain score based on subdomain depth.
+    Main domain = 1.0, subdomain = 0.7, sub-subdomain = 0.4
+    """
+    if pd.isna(domain) or domain == 'nan':
+        return 0.5
+    
+    # Count dots to determine subdomain level
+    dot_count = domain.count('.')
+    
+    if dot_count <= 1:  # Main domain (example.com)
+        return 1.0
+    elif dot_count == 2:  # One subdomain (blog.example.com)
+        return 0.7
+    else:  # Multiple subdomains (news.blog.example.com)
+        return 0.4
 
 # -----------------------------------------
 # Helper: Train and Save Model
@@ -45,9 +74,28 @@ def train_model(labeled_csv="labeled_backlinks.csv", model_path="backlink_model.
         df = pd.read_csv(labeled_csv)
         df = preprocess_data(df)
 
-        # Features and target
-        features = ['Domain rating', 'UR', 'Domain traffic', 'External links', 
-                   'Page traffic', 'Nofollow', 'Anchor_spam_flag']
+        # Features and target with priority weighting
+        # Priority 1: DR, Traffic, Active link status
+        # Priority 2: Referring domains, Linked domains, External links, Page traffic, Keywords, Anchor
+        # Priority 3: UR, Platform, Content, Nofollow, UGC, Sponsored, Rendered, Raw
+        
+        features = [
+            # High priority features (3x weight)
+            'DR_weighted', 'Traffic_weighted', 'Domain_score',
+            # Medium priority features (1x weight)
+            'External links', 'Page traffic', 'Anchor_spam_flag',
+            # Lower priority features (0.5x weight)
+            'UR', 'Nofollow'
+        ]
+        
+        # Only use features that exist in the dataset
+        available_features = [f for f in features if f in df.columns]
+        
+        # Add fallback for missing weighted features
+        if 'DR_weighted' not in df.columns and 'Domain rating' in df.columns:
+            available_features.append('Domain rating')
+        if 'Traffic_weighted' not in df.columns and 'Domain traffic' in df.columns:
+            available_features.append('Domain traffic')
         
         # Check if all required columns exist
         missing_cols = [col for col in features + ['Classification'] if col not in df.columns]
@@ -55,7 +103,7 @@ def train_model(labeled_csv="labeled_backlinks.csv", model_path="backlink_model.
             st.error(f"Missing required columns in training data: {missing_cols}")
             return False
 
-        X = df[features]
+        X = df[available_features]
         y = df['Classification']  # Good, Neutral, Toxic
 
         # Handle any missing values
@@ -93,17 +141,31 @@ def predict_backlinks(df, model):
     Predicts backlink quality using trained model.
     Adds probabilities and final classification to dataframe.
     """
-    features = ['Domain rating', 'UR', 'Domain traffic', 'External links', 
-               'Page traffic', 'Nofollow', 'Anchor_spam_flag']
+    # Use the same feature priority system as training
+    features = [
+        'DR_weighted', 'Traffic_weighted', 'Domain_score',
+        'External links', 'Page traffic', 'Anchor_spam_flag',
+        'UR', 'Nofollow'
+    ]
+    
+    # Only use features that exist in the dataset
+    available_features = [f for f in features if f in df.columns]
+    
+    # Add fallback for missing weighted features
+    if 'DR_weighted' not in df.columns and 'Domain rating' in df.columns:
+        available_features.append('Domain rating')
+    if 'Traffic_weighted' not in df.columns and 'Domain traffic' in df.columns:
+        available_features.append('Domain traffic')
 
-    # Check if all required columns exist
-    missing_cols = [col for col in features if col not in df.columns]
-    if missing_cols:
-        st.error(f"Missing required columns in prediction data: {missing_cols}")
+    # Check if essential columns exist
+    essential_cols = ['Domain rating', 'UR']
+    missing_essential = [col for col in essential_cols if col not in df.columns]
+    if missing_essential:
+        st.error(f"Missing essential columns: {missing_essential}")
         return df
 
     # Handle missing values
-    prediction_data = df[features].fillna(0)
+    prediction_data = df[available_features].fillna(0)
 
     predictions = model.predict(prediction_data)
     probabilities = model.predict_proba(prediction_data)
@@ -134,19 +196,24 @@ def main():
     """)
 
     # Sidebar with information
-    st.sidebar.header("📋 Required CSV Columns")
+    st.sidebar.header("📋 Feature Priority System")
     st.sidebar.write("""
-    **For Backlink Analysis:**
-    - Domain rating
-    - UR
-    - Domain traffic
-    - External links
-    - Page traffic
-    - Nofollow (TRUE/FALSE)
-    - Anchor (anchor text)
+    **High Priority (3x weight):**
+    - Domain Rating (DR)
+    - Domain Traffic
+    - Domain Type (main vs subdomain)
     
-    **For Training Data (additional):**
-    - Classification (Good/Neutral/Toxic)
+    **Medium Priority (1x weight):**
+    - External Links
+    - Page Traffic
+    - Anchor Text Quality
+    
+    **Lower Priority (0.5x weight):**
+    - URL Rating (UR)
+    - Nofollow Status
+    
+    **Required Columns:**
+    Domain rating, UR, Domain traffic, External links, Page traffic, Nofollow, Anchor
     """)
 
     # Upload CSV
@@ -210,15 +277,18 @@ def main():
             
             with col1:
                 good_count = classification_counts.get('Good', 0)
-                st.metric("Good Backlinks", good_count, f"{good_count/len(df)*100:.1f}%")
+                good_pct = (good_count/len(df)*100) if len(df) > 0 else 0
+                st.metric("Good Backlinks", good_count, f"{good_pct:.1f}%")
             
             with col2:
                 neutral_count = classification_counts.get('Neutral', 0)
-                st.metric("Neutral Backlinks", neutral_count, f"{neutral_count/len(df)*100:.1f}%")
+                neutral_pct = (neutral_count/len(df)*100) if len(df) > 0 else 0
+                st.metric("Neutral Backlinks", neutral_count, f"{neutral_pct:.1f}%")
             
             with col3:
                 toxic_count = classification_counts.get('Toxic', 0)
-                st.metric("Toxic Backlinks", toxic_count, f"{toxic_count/len(df)*100:.1f}%")
+                toxic_pct = (toxic_count/len(df)*100) if len(df) > 0 else 0
+                st.metric("Toxic Backlinks", toxic_count, f"{toxic_pct:.1f}%")
 
             # Visualization
             st.subheader("📊 Backlink Quality Distribution")
@@ -243,7 +313,7 @@ def main():
             # Top toxic backlinks (if any)
             if 'Toxic' in df['ML_Classification'].values:
                 st.subheader("⚠️ Most Problematic Backlinks")
-                toxic_df = df[df['ML_Classification'] == 'Toxic'].nlargest(5, 'Toxic_Probability')
+                toxic_df = df[df['ML_Classification'] == 'Toxic'].sort_values('Toxic_Probability', ascending=False).head(5)
                 if len(toxic_df) > 0:
                     st.dataframe(toxic_df[['Anchor', 'ML_Classification', 'Toxic_Probability', 'Domain rating', 'UR']])
 
