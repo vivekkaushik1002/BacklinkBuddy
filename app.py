@@ -263,7 +263,7 @@ def main():
             # Top toxic backlinks (if any)
             if 'Toxic' in df['ML_Classification'].values:
                 st.subheader("⚠️ Most Problematic Backlinks")
-                toxic_df = df[df['ML_Classification'] == 'Toxic'].nlargest(5, 'Toxic_Probability')
+                toxic_df = df[df['ML_Classification'] == 'Toxic'].nlargest(5, 'Toxic_Probability', keep='first')
                 if len(toxic_df) > 0:
                     st.dataframe(toxic_df[['Anchor', 'ML_Classification', 'Toxic_Probability', 'Domain rating', 'UR']])
 
